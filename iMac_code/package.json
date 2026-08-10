@@ -1,0 +1,16 @@
+{
+  "name": "pi-dictation",
+  "version": "1.0.0",
+  "description": "Dictation extension for Pi coding agent on macOS — speak instead of type",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "build": "cd dictation-helper && swift build -c release --disable-sandbox",
+    "clean": "rm -rf dictation-helper/.build",
+    "test": "cd dictation-helper && swift run -c release --disable-sandbox"
+  },
+  "keywords": ["pi", "dictation", "speech-to-text", "macos"],
+  "license": "MIT"
+}

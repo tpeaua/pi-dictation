@@ -1,0 +1,9 @@
+.DS_Store
+*.zip
+*.png
+*.jpg
+*.gif
+node_modules/
+.build/
+*.dSYM/
+.DS_Store
