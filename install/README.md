@@ -46,12 +46,10 @@ pi --version       # should show a version number
 
 ## Installation
 
-### Step 1: Put the folder somewhere
-
-Unzip `iMac_code` wherever you like. For example:
+### Step 1: Get the files
 
 ```bash
-mv ~/Downloads/iMac_code ~/pi-dictation
+git clone https://github.com/tpeaua/pi-dictation.git ~/pi-dictation
 ```
 
 ### Step 2: Run the installer
@@ -210,7 +208,7 @@ rm .pi/extensions/dictation
 ## Files in this package
 
 ```
-iMac_code/
+pi-dictation/
 ├── index.ts                 # Pi extension (the brains)
 ├── dictation-helper/        # Swift speech recognizer
 │   ├── Package.swift
