@@ -1,14 +1,14 @@
 # 🎤 Pi Dictation — Installation & User Guide
 
-> Speak instead of type. Native macOS speech-to-text inside Pi.
+> Speak instead of type. Native macOS speech-to-text and text-to-speech inside [Pi](https://github.com/earendil-works/pi). The only truly zero-dependency voice extension for Pi.
 
 ---
 
 ## What is this?
 
-A dictation extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono). It lets you talk to Pi using your Mac's built-in speech recognition — no cloud services, no accounts, no internet required. Everything runs locally on your machine.
+A dictation and conversation extension for the [Pi coding agent](https://github.com/earendil-works/pi). It lets you talk to Pi using your Mac's built-in speech recognition — no cloud services, no API keys, no accounts. Everything runs locally on your machine.
 
-You can dictate one-off messages or enter **voice mode** where Pi listens after every response, so you can have a full conversation without touching the keyboard.
+You can dictate one-off messages, enter **voice mode** (continuous dictation, read responses on screen), or enable **conversation mode** (full-duplex: Pi speaks aloud and listens simultaneously with barge-in).
 
 ---
 
@@ -17,11 +17,14 @@ You can dictate one-off messages or enter **voice mode** where Pi listens after 
 | Feature | How |
 |---------|-----|
 | `/dictate` | One-shot dictation — speak, it transcribes, sends to Pi |
-| `/voicemode` | Continuous conversation — Pi re-listens after each reply |
+| `/voicemode` | Continuous dictation — Pi re-listens after each reply (no TTS) |
+| `/conversation` | **Full-duplex conversation** — Pi speaks responses aloud (TTS) and listens for you |
 | `Ctrl+Shift+D` | Keyboard shortcut to start dictating instantly |
-| "let me dictate" | Just tell the LLM you want to dictate and it triggers for you |
+| `Ctrl+Shift+C` | Silence Pi mid-speech (conversation mode) |
+| Trigger words | Say "hey", "silence", "quiet" etc. to silence Pi without sending a message |
+| `dictate` tool | LLM can call dictation — just say "let me dictate" |
 
-Say **"exit"**, **"stop"**, or **"goodbye"** any time to leave voice mode. The microphone stops immediately — no lingering orange dot.
+Say **"exit"**, **"stop"**, **"goodbye"**, or **"end"** any time to leave voice/conversation mode.
 
 ---
 
@@ -94,25 +97,40 @@ Also confirm Siri is enabled:
 pi
 ```
 
-You should see this on startup:
+You should see your system info followed by the loaded message:
 
 ```
-Dictation loaded — /dictate, Ctrl+Shift+D, or /voicemode for continuous mode
+  Apple M3 Pro (Apple Silicon)  |  macOS 14.6 Sonoma  |  TTS: Samantha
+  Dictation loaded — /dictate, Ctrl+Shift+D, /voicemode, /conversation. Say 'hey' or Ctrl+Shift+C to silence Pi
 ```
 
 ### One-off dictation
 
-Type `/dictate` and press Enter. You'll see `🎤 Listening... speak now`. Speak naturally, pause for 3 seconds, and your words are sent to Pi.
+Type `/dictate` and press Enter. You'll see `🎤 Listening... speak now`. Speak naturally, pause for 10 seconds, and your words are sent to Pi.
 
 ### Continuous voice mode
 
-Type `/voicemode` and press Enter. Pi listens, you speak, Pi responds, then Pi listens again — hands-free conversation.
+Type `/voicemode` and press Enter. Pi listens, you speak, Pi responds, then Pi listens again — continuous hands-free dictation. Read Pi's responses on screen.
 
-To exit voice mode: say **"exit"**, **"stop"**, or **"goodbye"**. Or type `/voicemode` again. The mic stops instantly.
+To exit: say **"exit"**, **"stop"**, **"goodbye"**, **"bye"**, or **"end"**. Or type `/voicemode` again.
 
-### Keyboard shortcut
+### Conversation mode
 
-Press `Ctrl+Shift+D` anytime to start dictating.
+Type `/conversation` and press Enter. Pi **speaks its responses aloud** using the "Samantha" voice and listens simultaneously:
+
+- **Speak anytime** — you don't need to wait for Pi to finish. Your speech interrupts it naturally.
+- **Trigger words** — say **"hey"**, **"silence"**, **"quiet"**, **"shut up"**, **"hold on"**, **"wait"**, or **"pause"** to silence Pi without sending a message. Pi stays in conversation mode and listens for you.
+- **Exit** — say **"stop"**, **"exit"**, **"quit"**, **"goodbye"**, **"bye"**, or **"end"**.
+- **Silence shortcut** — `Ctrl+Shift+C` instantly silences Pi mid-sentence.
+
+> 💡 **Tip:** Use headphones to prevent Pi from hearing its own speech through the microphone.
+
+### Keyboard shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+D` | Start dictation |
+| `Ctrl+Shift+C` | Silence Pi's speech (conversation mode) |
 
 ### Let the LLM trigger it
 
@@ -125,10 +143,25 @@ Just say something like *"let me dictate my response"* — the LLM knows how to 
 1. The extension registers commands, shortcuts, and a tool inside Pi
 2. When triggered, Pi spawns a tiny Swift program that uses Apple's `SFSpeechRecognizer`
 3. The Swift helper shows partial transcription in real-time as you speak
-4. After 3 seconds of silence (or 30 seconds max), it prints the final text
-5. Pi reads that text and sends it as if you typed it
+4. After 10 seconds of silence (or 30 seconds max), it prints the final text
+5. Pi reads the text and sends it as if you typed it
+6. In `/conversation` mode, Pi also spawns macOS `say` to speak responses aloud — dictation runs in parallel so you can interrupt anytime
 
 The Swift helper compiles once on first run (~10 seconds). After that it's instant.
+
+## How it compares to other Pi voice extensions
+
+Pi has **no built-in voice features** — everything is extensions. Here's how pi-dictation stacks up:
+
+| Extension | STT | TTS | Conversation loop | Cloud-free |
+|-----------|-----|-----|-------------------|------------|
+| **picrophone** | Apple / WhisperKit | ✅ | `/voice` toggle | ✅ |
+| **privateer-speak** | Pluggable | ✅ | `/talk loop on` | ✅ (with OS voices) |
+| **pi-talk** | ❌ | ✅ (streaming) | ❌ | ❌ |
+| **pi-voice-loop** | xAI | xAI | ✅ (WebSocket) | ❌ |
+| **pi-dictation** (this) | Apple native | ✅ (`say`) | ✅ with trigger-word barge-in | ✅ **100% local, zero deps** |
+
+**Key differentiator:** pi-dictation is the only extension with zero npm dependencies for speech — it uses only Apple's built-in `SFSpeechRecognizer` and `say`. No API keys, no cloud accounts, no internet required.
 
 ---
 
@@ -152,10 +185,27 @@ Edit `dictation-helper/Sources/main.swift`:
 | Setting | Default | What it does |
 |---------|---------|--------------|
 | `timeoutSeconds` | `30` | Max recording seconds before auto-stop |
-| `silentTimeout` | `3.0` | Seconds of silence before auto-finish |
+| `silentTimeout` | `10.0` | Seconds of silence before auto-finish |
 | `locale` | `en-US` | Speech recognition language (e.g. `fr-FR`, `de-DE`) |
+| `requiresOnDeviceRecognition` | `false` | Use Apple servers (`false`) or on-device only (`true`; macOS 13+ required) |
 
 Changes take effect next time you dictate — no rebuild needed, it recompiles automatically.
+
+### TTS voice
+
+Edit `index.ts` and change the `TTS_VOICE` constant near the top:
+
+```ts
+const TTS_VOICE = "Samantha";
+```
+
+To find available voices on your Mac:
+
+```bash
+say -v '?'
+```
+
+Popular voices: `Samantha` (American), `Karen` (Australian), `Victoria` (American), `Tessa` (South African), `Moira` (Irish), `Veena` (Indian).
 
 ---
 
@@ -205,6 +255,17 @@ rm .pi/extensions/dictation
 
 ---
 
+## Platform-specific notes
+
+| Feature | Apple Silicon (M1–M4) | Intel |
+|---------|----------------------|-------|
+| Dictation | ✅ Full support | ✅ Full support |
+| TTS (`say`) | ✅ All voices | ✅ All voices |
+| On-device recognition | ✅ Fast (Neural Engine) | ✅ Supported (slower) |
+| Swift compilation | Native arm64 | Native x64 |
+
+> **Monterey users (macOS 12):** On-device recognition requires macOS 13+. Set `requiresOnDeviceRecognition = false` in `main.swift` to use Apple's servers.
+
 ## Files in this package
 
 ```
@@ -217,7 +278,7 @@ pi-dictation/
 ├── package.json
 ├── install.sh               # One-command installer
 ├── test-dictation.sh        # Standalone mic test
-├── README.md                # Quick reference
+├── README.md                # Project overview + comparison table
 └── install/
-    └── README.md            # ← this file (full guide)
+    └── README.md            # ← this file (full installation + usage guide)
 ```
