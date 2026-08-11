@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: - Configuration
 let timeoutSeconds: TimeInterval = 30.0
-let silentTimeout: TimeInterval = 3.0
+let silentTimeout: TimeInterval = 10.0
 let locale = Locale(identifier: "en-US")
 
 // Check authorization

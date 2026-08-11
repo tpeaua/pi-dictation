@@ -1,14 +1,81 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import os from "node:os";
 
 // __filename/__dirname are provided by jiti
 const EXT_DIR = __dirname;
 const HELPER_DIR = join(EXT_DIR, "dictation-helper");
 
 const COMPILED_BIN = join(HELPER_DIR, ".build/release/dictation-helper");
+
+// TTS voice — female American natural voice
+const TTS_VOICE = "Samantha";
+
+// ── System detection ────────────────────────────────────────────────
+
+interface SystemInfo {
+  chipName: string;       // e.g. "Apple M3 Pro" or "Intel Core i7"
+  architecture: string;   // "Apple Silicon" or "Intel"
+  archCode: string;       // "arm64" or "x64"
+  macOSVersion: string;   // e.g. "14.6"
+  macOSName: string;      // e.g. "Sonoma"
+}
+
+// Darwin major version → macOS marketing name
+const DARWIN_TO_MACOS: Record<number, string> = {
+  20: "Big Sur",
+  21: "Monterey",
+  22: "Ventura",
+  23: "Sonoma",
+  24: "Sequoia",
+  25: "macOS 16",
+};
+
+let _systemInfo: SystemInfo | null = null;
+
+function detectSystem(): SystemInfo {
+  if (_systemInfo) return _systemInfo;
+
+  const archCode = os.arch(); // "arm64" or "x64"
+  const architecture = archCode === "arm64" ? "Apple Silicon" : "Intel";
+
+  // Get CPU brand string
+  let chipName = architecture;
+  try {
+    chipName = execSync("sysctl -n machdep.cpu.brand_string", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    // Clean up Intel branding
+    if (archCode === "x64") {
+      chipName = chipName.replace(/\s+\(R\)/g, "").replace(/\s+CPU\s+@.*$/, "");
+      chipName = chipName.replace(/Intel\(R\)/, "Intel");
+    }
+  } catch { /* fall back to architecture string */ }
+
+  // Get macOS version
+  let macOSVersion = "unknown";
+  try {
+    macOSVersion = execSync("sw_vers -productVersion", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+  } catch { /* fall back */ }
+
+  // Derive marketing name from Darwin kernel version
+  const darwinMajor = parseInt(os.release().split(".")[0], 10);
+  const macOSName = DARWIN_TO_MACOS[darwinMajor] ?? `Darwin ${darwinMajor}`;
+
+  _systemInfo = { chipName, architecture, archCode, macOSVersion, macOSName };
+  return _systemInfo;
+}
+
+function systemInfo(): SystemInfo {
+  return _systemInfo ?? detectSystem();
+}
 
 /**
  * Build the Swift helper if not already compiled.
@@ -93,89 +160,77 @@ async function runDictation(binPath: string, signal?: AbortSignal): Promise<stri
 export default function (pi: ExtensionAPI) {
   // Voice mode state
   let voiceMode = false;
+  let conversationMode = false;
   let dictating = false; // prevent re-entrant dictation
-  let currentAbortController: AbortController | null = null; // track running dictation for cancellation
+  let lastAssistantText = ""; // accumulated assistant text for TTS
+  let currentSayProcess: ChildProcess | null = null; // track TTS process for manual interrupt
+
+  // Spoken trigger words that silence Pi without sending a message
+  const INTERRUPT_TRIGGERS = ["hey", "silence", "quiet", "shut up", "hold on", "wait", "pause"];
+
+  function isInterruptTrigger(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    return INTERRUPT_TRIGGERS.some(t => lower === t || lower.startsWith(t + " ") || lower.endsWith(" " + t));
+  }
 
   // Shared dictation logic — returns transcribed text or null on failure
-  async function doDictation(signal: AbortSignal): Promise<string | null> {
+  async function doDictation(ctx: any): Promise<string | null> {
     const binPath = ensureBuilt();
-    const text = await runDictation(binPath, signal);
+    const text = await runDictation(binPath, ctx.signal);
     return text || null;
   }
 
-  // Check if the user said an exit phrase
-  const EXIT_PHRASES = [
-    "stop voice", "exit voice", "end voice", "quit voice",
-    "stop dictation", "exit dictation", "end dictation", "quit dictation",
-    "dictation stop", "dictation off", "dictation end",
-    "voice stop", "voice off", "voice end",
-    "stop listening", "listening off", "stop recording",
-    "roger dictation stop",
-    "turn off mic", "turn off microphone", "disable mic", "disable microphone",
-    "stop mic", "mute mic", "kill mic",
-    "privacy mode", "privacy",
-    "shut down", "shut up",
-  ];
-  const EXIT_WORDS = ["stop", "exit", "quit", "goodbye", "bye", "end"];
-
-  function isExitPhrase(text: string): boolean {
-    const lower = text.toLowerCase().trim();
-
-    // "roger dictation stop" — kill everything and exit
-    if (lower.includes("roger dictation stop")) {
-      killAllHelpers();
+  /**
+   * Kill the currently running TTS process (if any).
+   */
+  function silencePi(): boolean {
+    if (currentSayProcess && currentSayProcess.exitCode === null) {
+      currentSayProcess.kill("SIGTERM");
+      currentSayProcess = null;
       return true;
     }
-
-    // Exact single word match
-    if (EXIT_WORDS.includes(lower)) return true;
-
-    // Contains an exit phrase like "stop voice mode"
-    if (EXIT_PHRASES.some((p) => lower.includes(p))) return true;
-
-    // Starts with an exit word (e.g. "stop please", "exit voice mode")
-    if (EXIT_WORDS.some((w) => lower.startsWith(w + " "))) return true;
-
-    // Ends with an exit word (e.g. "please stop", "ok goodbye")
-    if (EXIT_WORDS.some((w) => lower.endsWith(" " + w))) return true;
-
     return false;
   }
 
-  // Stop any running dictation immediately (abort + killall)
-  function abortDictation(): void {
-    if (currentAbortController) {
-      currentAbortController.abort();
-      currentAbortController = null;
-    }
-    killAllHelpers();
-  }
-
-  // Nuke any lingering dictation-helper processes
-  function killAllHelpers(): void {
-    try {
-      execSync("pkill -f dictation-helper", { stdio: "ignore" });
-    } catch {
-      // pkill returns non-zero if no processes matched — ignore
-    }
+  /**
+   * Speak text aloud using macOS built-in `say` command (NSSpeechSynthesizer).
+   * Returns the child process so it can be killed for interruption.
+   */
+  function speakText(text: string, signal?: AbortSignal) {
+    const child = spawn("say", ["-v", TTS_VOICE, text], { signal });
+    currentSayProcess = child;
+    const promise = new Promise<void>((resolve, reject) => {
+      child.on("close", (code) => {
+        currentSayProcess = null;
+        if (code === 0 || signal?.aborted) resolve();
+        else reject(new Error(`say exited with code ${code}`));
+      });
+      child.on("error", (err) => {
+        currentSayProcess = null;
+        if (signal?.aborted) resolve();
+        else reject(err);
+      });
+    });
+    return { process: child, promise };
   }
 
   // Dictation loop step — listens and sends as user message
   async function dictateAndSend(pi: ExtensionAPI, ctx: any): Promise<void> {
     if (dictating) return;
     dictating = true;
-
-    // Create a fresh AbortController so we can cancel mid-dictation
-    currentAbortController = new AbortController();
     try {
       ctx.ui.setStatus("dictation", "🎤 Listening... speak now");
-      const text = await doDictation(currentAbortController.signal);
+      const text = await doDictation(ctx);
       if (text) {
-        // Exit voice mode on these phrases
-        if (isExitPhrase(text)) {
+        const lower = text.toLowerCase().trim();
+        // Exit voice/conversation mode if text contains any of these words
+        const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
+        if (exitWords.some(word => lower.includes(word))) {
+          const wasConversation = conversationMode;
           voiceMode = false;
+          conversationMode = false;
           ctx.ui.setStatus("dictation", undefined);
-          ctx.ui.notify("🔇 Voice mode exited", "info");
+          ctx.ui.notify(wasConversation ? "🔇 Conversation mode exited" : "🔇 Voice mode exited", "info");
           return;
         }
         ctx.ui.notify(`📝 Dictated: "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}"`, "info");
@@ -186,6 +241,7 @@ export default function (pi: ExtensionAPI) {
       // Don't stop voice mode on transient errors
       if (msg.includes("cancelled") || msg.includes("aborted")) {
         voiceMode = false;
+        conversationMode = false;
         ctx.ui.setStatus("dictation", undefined);
         ctx.ui.notify("🔇 Voice mode cancelled", "info");
         return;
@@ -194,16 +250,136 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(`Dictation error: ${msg}`, "error");
     } finally {
       dictating = false;
-      currentAbortController = null;
     }
   }
 
-  // When Pi finishes responding, auto-dictate if in voice mode
+  // Track assistant text for TTS — clear at turn start, accumulate on message_end
+  pi.on("agent_start", async () => {
+    lastAssistantText = "";
+  });
+
+  pi.on("message_end", async (event) => {
+    if (event.message.role === "assistant") {
+      const textBlocks = (event.message.content as any[])
+        .filter((c: any) => c.type === "text")
+        .map((c: any) => c.text)
+        .join("\n");
+      if (textBlocks) {
+        lastAssistantText = textBlocks;
+      }
+    }
+  });
+
+  // When Pi finishes responding, speak + auto-dictate if in conversation mode,
+  // or just auto-dictate if in voice mode
   pi.on("agent_settled", async (_event, ctx) => {
-    if (!voiceMode || dictating) return;
-    // Small delay to let Pi's UI settle before starting dictation
-    await new Promise((r) => setTimeout(r, 500));
-    await dictateAndSend(pi, ctx);
+    if (dictating) return;
+
+    if (conversationMode && lastAssistantText) {
+      const textToSpeak = lastAssistantText;
+      lastAssistantText = "";
+
+      // Start speaking and listening simultaneously so the user can interrupt
+      ctx.ui.setStatus("dictation", "🔊 Speaking... (speak to interrupt)");
+
+      const { process: sayProcess, promise: sayPromise } = speakText(textToSpeak, ctx.signal);
+
+      // Start dictation in parallel
+      let interruptText: string | null = null;
+      const dictationPromise = (async () => {
+        try {
+          const binPath = ensureBuilt();
+          interruptText = await runDictation(binPath, ctx.signal);
+        } catch {
+          // Dictation error — ignore, we'll try again after say finishes
+        }
+      })();
+
+      // Race: did the user speak before TTS finished?
+      let sayFinished = false;
+      const sayDone = sayPromise.then(() => { sayFinished = true; }).catch(() => { sayFinished = true; });
+
+      // Poll until either say finishes or dictation gets speech
+      while (!sayFinished && interruptText === null) {
+        await new Promise(r => setTimeout(r, 150));
+        if (sayProcess.exitCode !== null) sayFinished = true;
+      }
+
+      if (interruptText !== null && !sayFinished) {
+        // User interrupted! Kill TTS and process their speech
+        silencePi();
+        ctx.ui.setStatus("dictation", undefined);
+
+        const text = interruptText.trim();
+        const lower = text.toLowerCase();
+        const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
+
+        if (isInterruptTrigger(text)) {
+          // Trigger word — just silence Pi, stay in conversation mode
+          ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
+          ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+          await dictateAndSend(pi, ctx);
+        } else if (exitWords.some(word => lower.includes(word))) {
+          conversationMode = false;
+          voiceMode = false;
+          ctx.ui.notify("🔇 Conversation mode exited", "info");
+        } else {
+          ctx.ui.notify("⏹️ Interrupted — processing your speech...", "info");
+          pi.sendUserMessage(text);
+        }
+      } else {
+        // TTS finished naturally — wait for dictation to complete (if still running)
+        // or start a fresh dictation
+        if (interruptText !== null) {
+          // Dictation also finished during TTS — treat as user input
+          const text = interruptText.trim();
+          const lower = text.toLowerCase();
+          const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
+
+          if (isInterruptTrigger(text)) {
+            ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
+            ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+            await dictateAndSend(pi, ctx);
+          } else if (exitWords.some(word => lower.includes(word))) {
+            conversationMode = false;
+            voiceMode = false;
+            ctx.ui.notify("🔇 Conversation mode exited", "info");
+          } else {
+            pi.sendUserMessage(text);
+          }
+        } else {
+          // TTS finished, dictation still listening — let it continue naturally
+          // The dictationPromise will eventually resolve and we handle it below
+          await dictationPromise;
+          if (interruptText) {
+            const text = interruptText.trim();
+            const lower = text.toLowerCase();
+            const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
+
+            if (isInterruptTrigger(text)) {
+              ctx.ui.setStatus("dictation", undefined);
+              ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
+              ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+              await dictateAndSend(pi, ctx);
+            } else if (exitWords.some(word => lower.includes(word))) {
+              conversationMode = false;
+              voiceMode = false;
+              ctx.ui.setStatus("dictation", undefined);
+              ctx.ui.notify("🔇 Conversation mode exited", "info");
+            } else {
+              ctx.ui.setStatus("dictation", undefined);
+              pi.sendUserMessage(text);
+            }
+          } else {
+            // Dictation timed out — go again
+            ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+            await dictateAndSend(pi, ctx);
+          }
+        }
+      }
+    } else if (voiceMode) {
+      await dictateAndSend(pi, ctx);
+    }
   });
 
   // Register command: /dictate
@@ -231,19 +407,36 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Register command: /voicemode — continuous dictation loop
+  // Register command: /voicemode — continuous dictation loop (input only)
   pi.registerCommand("voicemode", {
     description: "Toggle continuous voice mode — Pi listens after each response",
     handler: async (_args, ctx) => {
+      conversationMode = false;
       voiceMode = !voiceMode;
       if (voiceMode) {
-        ctx.ui.notify("🔊 Voice mode ON — speak now. Say 'roger dictation stop' or 'stop' to leave.", "info");
+        ctx.ui.notify("🔊 Voice mode ON — speak now. Say 'exit' or 'stop' to leave.", "info");
         ctx.ui.setStatus("dictation", "🎤 Voice mode — listening...");
         await dictateAndSend(pi, ctx);
       } else {
-        abortDictation();
         ctx.ui.setStatus("dictation", undefined);
         ctx.ui.notify("🔇 Voice mode OFF", "info");
+      }
+    },
+  });
+
+  // Register command: /conversation — full-duplex voice with TTS spoken responses
+  pi.registerCommand("conversation", {
+    description: "Toggle full voice conversation — Pi speaks responses aloud and listens for you",
+    handler: async (_args, ctx) => {
+      voiceMode = false;
+      conversationMode = !conversationMode;
+      if (conversationMode) {
+        ctx.ui.notify("🔊 Conversation mode ON — Pi will speak aloud. Say 'exit' to stop.", "info");
+        ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+        await dictateAndSend(pi, ctx);
+      } else {
+        ctx.ui.setStatus("dictation", undefined);
+        ctx.ui.notify("🔇 Conversation mode OFF", "info");
       }
     },
   });
@@ -253,39 +446,16 @@ export default function (pi: ExtensionAPI) {
     name: "dictate",
     label: "Dictate",
     description:
-      "Listen to the user's speech via the microphone and return the transcribed text. Use this when the user wants to dictate instead of type, or says 'dictate', 'voice input', 'speech to text', etc. After a successful dictation, voice mode is automatically enabled so the conversation continues without the user needing to re-trigger dictation.",
+      "Listen to the user's speech via the microphone and return the transcribed text. Use this when the user wants to dictate instead of type, or says 'dictate', 'voice input', 'speech to text', etc.",
     promptSnippet: "Capture speech input from the microphone and return transcribed text",
     promptGuidelines: [
       "Use dictate when the user wants to speak instead of type, mentions dictation, or says things like 'let me dictate' or 'voice input'.",
-      "After a successful dictation, let the user know they can keep dictating — voice mode is on.",
-      "If the user says 'roger dictation stop', 'exit', 'stop', 'goodbye', or 'end dictation', voice mode will stop.",
     ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       try {
         const binPath = ensureBuilt();
         const text = await runDictation(binPath, signal);
-
-        // Exit voice mode on these phrases
-        if (isExitPhrase(text)) {
-          voiceMode = false;
-          ctx.ui.setStatus("dictation", undefined);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `User dictated: "${text}". Voice mode has been exited.`,
-              },
-            ],
-            details: { transcribedText: text, voiceModeExited: true },
-          };
-        }
-
-        // Auto-enable voice mode so conversation continues
-        if (!voiceMode) {
-          voiceMode = true;
-          ctx.ui.setStatus("dictation", "🎤 Voice mode — auto-continue");
-        }
 
         return {
           content: [
@@ -294,7 +464,7 @@ export default function (pi: ExtensionAPI) {
               text: `User dictated: "${text}"`,
             },
           ],
-          details: { transcribedText: text, voiceModeActive: true },
+          details: { transcribedText: text },
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -303,6 +473,21 @@ export default function (pi: ExtensionAPI) {
           details: { error: msg },
           isError: true,
         };
+      }
+    },
+  });
+
+  // Register keyboard shortcut (Ctrl+Shift+C) — silence Pi in conversation mode
+  pi.registerShortcut("ctrl+shift+c", {
+    description: "Silence Pi's speech",
+    handler: async (ctx) => {
+      if (silencePi()) {
+        ctx.ui.notify("🔇 Silenced — listening...", "info");
+        ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
+        // Restart dictation loop
+        await dictateAndSend(pi, ctx);
+      } else {
+        ctx.ui.notify("Nothing to silence — Pi is not speaking", "info");
       }
     },
   });
@@ -333,11 +518,19 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Detect system on load
+  const sys = detectSystem();
+
   // Notify on session start
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.notify(
-      "Dictation loaded — /dictate, Ctrl+Shift+D, or /voicemode for continuous mode",
+      `${sys.chipName} (${sys.architecture})  |  macOS ${sys.macOSVersion} ${sys.macOSName}  |  TTS: ${TTS_VOICE}`,
+      "info",
+    );
+    ctx.ui.notify(
+      "Dictation loaded — /dictate, Ctrl+Shift+D, /voicemode, /conversation. Say 'hey' or Ctrl+Shift+C to silence Pi",
       "info",
     );
   });
+
 }
