@@ -7,3 +7,6 @@ node_modules/
 .build/
 *.dSYM/
 .DS_Store
+
+# Per-device deployment copy (has machine-specific settings like silentTimeout)
+macBook_PI_Dictation/

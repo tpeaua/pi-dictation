@@ -165,6 +165,59 @@ export default function (pi: ExtensionAPI) {
   let lastAssistantText = ""; // accumulated assistant text for TTS
   let currentSayProcess: ChildProcess | null = null; // track TTS process for manual interrupt
 
+  // -------------------------------------------------------------------------
+  // Voice-mode safety: while speech input is active, Pi is limited to
+  // read-only tools so a misheard command can't modify files or run shell.
+  // Fail closed — anything not listed here is blocked.
+  // -------------------------------------------------------------------------
+  const READONLY_TOOLS = new Set([
+    "read",
+    "websearch",
+    "webfetch",
+    "web_search",
+    "source_check",
+    "fetch_content",
+    "get_search_content",
+    "dictate",
+  ]);
+  const voiceActive = () => voiceMode || conversationMode;
+
+  // Block mutating/dangerous tools while voice input is active.
+  pi.on("tool_call", async (event) => {
+    if (!voiceActive() || READONLY_TOOLS.has(event.toolName)) return;
+    return {
+      block: true,
+      reason:
+        `Tool "${event.toolName}" is blocked while voice mode is active (read-only tools only). ` +
+        `Ask the user to say "exit" (or type /voicemode or /conversation) to leave voice mode first.`,
+    };
+  });
+
+  // Prime the model so it avoids mutating tools during voice input.
+  pi.on("before_agent_start", async (event) => {
+    if (!voiceActive()) return;
+    return {
+      systemPrompt:
+        event.systemPrompt +
+        "\n\n[Voice mode] You are receiving speech-to-text input, which can be mis-transcribed. " +
+        "Use ONLY read-only tools (read, web search, fetch). Do not modify files or run shell commands. " +
+        "If the user requests an action that changes files or runs commands, explain what you would do and ask them to type it instead (or say 'exit' to leave voice mode).",
+    };
+  });
+
+  // Block typed `!command` shell escapes while voice mode is active.
+  pi.on("user_bash", async () => {
+    if (!voiceActive()) return;
+    return {
+      result: {
+        output: "Blocked: voice mode is read-only. Type /voicemode or /conversation to leave voice mode first.",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    };
+  });
+
   // Spoken trigger words that silence Pi without sending a message
   const INTERRUPT_TRIGGERS = ["hey", "silence", "quiet", "shut up", "hold on", "wait", "pause"];
 
@@ -414,7 +467,7 @@ export default function (pi: ExtensionAPI) {
       conversationMode = false;
       voiceMode = !voiceMode;
       if (voiceMode) {
-        ctx.ui.notify("🔊 Voice mode ON — speak now. Say 'exit' or 'stop' to leave.", "info");
+        ctx.ui.notify("🔊 Voice mode ON — speak now (read-only tools while active). Say 'exit' or 'stop' to leave.", "info");
         ctx.ui.setStatus("dictation", "🎤 Voice mode — listening...");
         await dictateAndSend(pi, ctx);
       } else {
@@ -431,7 +484,7 @@ export default function (pi: ExtensionAPI) {
       voiceMode = false;
       conversationMode = !conversationMode;
       if (conversationMode) {
-        ctx.ui.notify("🔊 Conversation mode ON — Pi will speak aloud. Say 'exit' to stop.", "info");
+        ctx.ui.notify("🔊 Conversation mode ON — Pi will speak aloud (read-only tools while active). Say 'exit' to stop.", "info");
         ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
         await dictateAndSend(pi, ctx);
       } else {

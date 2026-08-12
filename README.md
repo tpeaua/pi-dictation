@@ -70,6 +70,10 @@ While Pi is speaking in conversation mode:
 | Say a trigger word | `hey`, `silence`, `quiet`, `shut up`, `hold on`, `wait`, `pause` |
 | Say anything else | Pi is interrupted and your speech is sent as a message |
 
+### Safety: read-only mode
+
+While `/voicemode` or `/conversation` is active, Pi is restricted to **read-only tools** (read files, web search, fetch). It cannot modify files or run shell commands — so a misheard word can't trigger a destructive action. To do something that changes files or runs commands, say **"exit"** to leave voice mode and type it instead.
+
 ### Testing outside Pi
 
 ```bash
@@ -154,6 +158,7 @@ Pi has **no built-in voice features** — everything is extensions. Before pi-di
 - **Trigger-word barge-in** — say "hey", "silence", "quiet", "shut up", "hold on", "wait", or "pause" to silence Pi mid-sentence without sending a message. Stays in conversation mode.
 - **Full-duplex** — `/conversation` speaks and listens simultaneously. No push-to-talk required.
 - **Native Swift helper** — compiled on your machine with a single `swift build`, no pre-built binaries needed.
+- **Read-only voice mode** — while `/voicemode` or `/conversation` is active, Pi is locked to read-only tools so a misheard word can't trigger file edits or shell commands.
 
 ## System detection
 
