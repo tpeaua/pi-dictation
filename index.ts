@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 
@@ -117,7 +117,7 @@ function resolveSettings(): DictationSettings {
 
   const defaults: DictationSettings = {
     // Intel recognition is slower → longer silence grace before auto-finish.
-    silentTimeout: isIntel ? 10.0 : 3.0,
+    silentTimeout: isIntel ? 4.0 : 3.0,
     timeoutSeconds: 30.0,
     locale: "en-US",
     // Server-based by default (consistent, works on macOS 12+).
@@ -144,8 +144,12 @@ function dictationArgs(): string[] {
  * Build the Swift helper if not already compiled.
  */
 function ensureBuilt(): string {
-  // Check for pre-compiled binary
-  if (existsSync(COMPILED_BIN)) {
+  // Rebuild if the binary is missing OR the Swift source changed since the
+  // binary was built. (swift build won't re-run unless we ask it to.)
+  const swiftSrc = join(HELPER_DIR, "Sources", "main.swift");
+  const isFresh = existsSync(COMPILED_BIN)
+    && (!existsSync(swiftSrc) || statSync(swiftSrc).mtimeMs <= statSync(COMPILED_BIN).mtimeMs);
+  if (isFresh) {
     return COMPILED_BIN;
   }
 
@@ -289,6 +293,18 @@ export default function (pi: ExtensionAPI) {
     return INTERRUPT_TRIGGERS.some(t => lower === t || lower.startsWith(t + " ") || lower.endsWith(" " + t));
   }
 
+  // Spoken exit words that leave voice/conversation mode.
+  const EXIT_WORDS = new Set(["exit", "quit", "stop", "goodbye", "bye", "end"]);
+
+  // Only treat a SHORT utterance containing an exit word as a real exit
+  // command. This prevents false exits when the mic picks up Pi's own TTS,
+  // which often says "exit"/"stop" inside a longer sentence.
+  function isExitCommand(text: string): boolean {
+    const tokens = text.toLowerCase().trim().split(/[^a-z]+/).filter(Boolean);
+    if (tokens.length === 0 || tokens.length > 4) return false;
+    return tokens.some((t) => EXIT_WORDS.has(t));
+  }
+
   // Shared dictation logic — returns transcribed text or null on failure
   async function doDictation(ctx: any): Promise<string | null> {
     const binPath = ensureBuilt();
@@ -338,10 +354,8 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setStatus("dictation", "🎤 Listening... speak now");
       const text = await doDictation(ctx);
       if (text) {
-        const lower = text.toLowerCase().trim();
-        // Exit voice/conversation mode if text contains any of these words
-        const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
-        if (exitWords.some(word => lower.includes(word))) {
+        // Exit voice/conversation mode only on a short, explicit exit command.
+        if (isExitCommand(text)) {
           const wasConversation = conversationMode;
           voiceMode = false;
           conversationMode = false;
@@ -427,15 +441,13 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.setStatus("dictation", undefined);
 
         const text = interruptText.trim();
-        const lower = text.toLowerCase();
-        const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
 
         if (isInterruptTrigger(text)) {
           // Trigger word — just silence Pi, stay in conversation mode
           ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
           ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
           await dictateAndSend(pi, ctx);
-        } else if (exitWords.some(word => lower.includes(word))) {
+        } else if (isExitCommand(text)) {
           conversationMode = false;
           voiceMode = false;
           ctx.ui.notify("🔇 Conversation mode exited", "info");
@@ -449,14 +461,12 @@ export default function (pi: ExtensionAPI) {
         if (interruptText !== null) {
           // Dictation also finished during TTS — treat as user input
           const text = interruptText.trim();
-          const lower = text.toLowerCase();
-          const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
 
           if (isInterruptTrigger(text)) {
             ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
             ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
             await dictateAndSend(pi, ctx);
-          } else if (exitWords.some(word => lower.includes(word))) {
+          } else if (isExitCommand(text)) {
             conversationMode = false;
             voiceMode = false;
             ctx.ui.notify("🔇 Conversation mode exited", "info");
@@ -469,15 +479,13 @@ export default function (pi: ExtensionAPI) {
           await dictationPromise;
           if (interruptText) {
             const text = interruptText.trim();
-            const lower = text.toLowerCase();
-            const exitWords = ["exit", "quit", "stop", "goodbye", "bye", "end"];
 
             if (isInterruptTrigger(text)) {
               ctx.ui.setStatus("dictation", undefined);
               ctx.ui.notify(`🔇 Silenced (trigger: "${text}") — listening...`, "info");
               ctx.ui.setStatus("dictation", "🎤 Conversation — listening...");
               await dictateAndSend(pi, ctx);
-            } else if (exitWords.some(word => lower.includes(word))) {
+            } else if (isExitCommand(text)) {
               conversationMode = false;
               voiceMode = false;
               ctx.ui.setStatus("dictation", undefined);

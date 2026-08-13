@@ -90,7 +90,7 @@ pi-dictation auto-detects your Mac and picks the right silence timeout — no ed
 
 | Setting | Apple Silicon (M1–M4) | Intel |
 |---------|----------------------|-------|
-| `silentTimeout` (auto) | `3.0` | `10.0` |
+| `silentTimeout` (auto) | `3.0` | `4.0` |
 
 **To override any setting**, create `~/.pi-dictation.json` (all keys optional):
 

@@ -180,7 +180,7 @@ Speak a few words. You should see live transcription. Press `Ctrl+C` to quit.
 
 ## Customising
 
-Speech recognition is **auto-configured** — pi-dictation detects your Mac (Apple Silicon → `silentTimeout: 3.0`, Intel → `10.0`). To override, create `~/.pi-dictation.json` (all keys optional):
+Speech recognition is **auto-configured** — pi-dictation detects your Mac (Apple Silicon → `silentTimeout: 3.0`, Intel → `4.0`). To override, create `~/.pi-dictation.json` (all keys optional):
 
 ```json
 {
