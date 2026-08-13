@@ -2,9 +2,32 @@ import Speech
 import Foundation
 
 // MARK: - Configuration
-let timeoutSeconds: TimeInterval = 30.0
-let silentTimeout: TimeInterval = 10.0
-let locale = Locale(identifier: "en-US")
+// Defaults are overridden by command-line arguments passed by the Pi extension,
+// which auto-detects the platform and merges user config from ~/.pi-dictation.json.
+var timeoutSeconds: TimeInterval = 30.0
+var silentTimeout: TimeInterval = 10.0
+var locale = Locale(identifier: "en-US")
+var onDevice = false
+
+let rawArgs = CommandLine.arguments
+var argIndex = 1
+while argIndex < rawArgs.count {
+    switch rawArgs[argIndex] {
+    case "--silent-timeout":
+        if argIndex + 1 < rawArgs.count, let v = Double(rawArgs[argIndex + 1]) { silentTimeout = v; argIndex += 1 }
+    case "--timeout":
+        if argIndex + 1 < rawArgs.count, let v = Double(rawArgs[argIndex + 1]) { timeoutSeconds = v; argIndex += 1 }
+    case "--locale":
+        if argIndex + 1 < rawArgs.count { locale = Locale(identifier: rawArgs[argIndex + 1]); argIndex += 1 }
+    case "--on-device":
+        onDevice = true
+    case "--server":
+        onDevice = false
+    default:
+        break
+    }
+    argIndex += 1
+}
 
 // Check authorization
 let authStatus = SFSpeechRecognizer.authorizationStatus()
@@ -46,7 +69,7 @@ let recordingFormat = inputNode.outputFormat(forBus: 0)
 // Create recognition request
 let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
 recognitionRequest.shouldReportPartialResults = true
-recognitionRequest.requiresOnDeviceRecognition = false
+recognitionRequest.requiresOnDeviceRecognition = onDevice
 recognitionRequest.taskHint = .dictation
 
 // Install tap — feed native audio directly to recognizer
@@ -71,7 +94,7 @@ let task = recognizer.recognitionTask(with: recognitionRequest) { result, error 
         if nsError.domain == "kLSRErrorDomain" && nsError.code == 201 {
             fputs("\n⚠️  Siri is disabled. To use on-device dictation, enable it in:\n", stderr)
             fputs("   System Preferences > Siri > Enable Ask Siri\n", stderr)
-            fputs("   Or set requiresOnDeviceRecognition = false in main.swift for server-based.\n", stderr)
+            fputs("   Or run with --server (or set \"onDevice\": false in ~/.pi-dictation.json).\n", stderr)
         } else if nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 203 {
             // Benign error that occurs when recognition finishes — ignore
         } else {

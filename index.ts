@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 
@@ -77,6 +77,69 @@ function systemInfo(): SystemInfo {
   return _systemInfo ?? detectSystem();
 }
 
+// ── Settings: platform auto-detection + user overrides ────────────────
+
+interface DictationSettings {
+  silentTimeout: number;   // seconds of silence before auto-finish
+  timeoutSeconds: number;  // max recording seconds
+  locale: string;          // speech recognition locale
+  onDevice: boolean;       // true = on-device, false = Apple servers
+}
+
+const CONFIG_PATH = join(os.homedir(), ".pi-dictation.json");
+
+let _settings: DictationSettings | null = null;
+
+/** Read optional user overrides from ~/.pi-dictation.json. */
+function loadConfig(): Partial<DictationSettings> {
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const out: Partial<DictationSettings> = {};
+    if (typeof parsed.silentTimeout === "number") out.silentTimeout = parsed.silentTimeout;
+    if (typeof parsed.timeoutSeconds === "number") out.timeoutSeconds = parsed.timeoutSeconds;
+    if (typeof parsed.locale === "string") out.locale = parsed.locale;
+    if (typeof parsed.onDevice === "boolean") out.onDevice = parsed.onDevice;
+    return out;
+  } catch {
+    return {}; // no config file, or unreadable/invalid JSON
+  }
+}
+
+/**
+ * Resolve effective settings = platform auto-detection + user overrides.
+ * Cached for the session.
+ */
+function resolveSettings(): DictationSettings {
+  if (_settings) return _settings;
+
+  const sys = systemInfo();
+  const isIntel = sys.architecture === "Intel";
+
+  const defaults: DictationSettings = {
+    // Intel recognition is slower → longer silence grace before auto-finish.
+    silentTimeout: isIntel ? 10.0 : 3.0,
+    timeoutSeconds: 30.0,
+    locale: "en-US",
+    // Server-based by default (consistent, works on macOS 12+).
+    // Apple Silicon + macOS 13+ users can set "onDevice": true for fully-local.
+    onDevice: false,
+  };
+
+  _settings = { ...defaults, ...loadConfig() };
+  return _settings;
+}
+
+/** CLI arguments passed to the Swift helper. */
+function dictationArgs(): string[] {
+  const s = resolveSettings();
+  return [
+    "--silent-timeout", String(s.silentTimeout),
+    "--timeout", String(s.timeoutSeconds),
+    "--locale", s.locale,
+    s.onDevice ? "--on-device" : "--server",
+  ];
+}
+
 /**
  * Build the Swift helper if not already compiled.
  */
@@ -120,7 +183,7 @@ function ensureBuilt(): string {
  */
 async function runDictation(binPath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(binPath, [], {
+    const child = spawn(binPath, dictationArgs(), {
       stdio: ["inherit", "pipe", "inherit"], // stdin=inherit, stdout=pipe, stderr=inherit
       signal,
     });

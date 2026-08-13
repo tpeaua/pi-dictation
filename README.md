@@ -84,18 +84,26 @@ Speak a few words — you'll see live transcription. Press Ctrl+C to quit.
 
 ## Configuration
 
-### Speech recognition
+### Speech recognition (auto-configured)
 
-Edit `dictation-helper/Sources/main.swift`:
+pi-dictation auto-detects your Mac and picks the right silence timeout — no editing required:
 
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| `timeoutSeconds` | `30` | Max recording seconds before auto-stop |
-| `silentTimeout` | `3.0` | Seconds of silence before auto-finish |
-| `locale` | `en-US` | Language (e.g. `fr-FR`, `de-DE`) |
-| `requiresOnDeviceRecognition` | `false` | Use Apple's cloud servers (`false`) or on-device only (`true`) |
+| Setting | Apple Silicon (M1–M4) | Intel |
+|---------|----------------------|-------|
+| `silentTimeout` (auto) | `3.0` | `10.0` |
 
-The helper recompiles automatically on next use.
+**To override any setting**, create `~/.pi-dictation.json` (all keys optional):
+
+```json
+{
+  "silentTimeout": 5.0,
+  "timeoutSeconds": 30,
+  "locale": "en-US",
+  "onDevice": false
+}
+```
+
+Omit keys to fall back to the auto-detected defaults. `onDevice: true` uses fully on-device recognition (private, offline) — best on Apple Silicon with macOS 13+, and Siri must be enabled.
 
 ### TTS Voice
 
@@ -127,7 +135,7 @@ Popular female voices: `Samantha` (American), `Karen` (Australian), `Victoria` (
 
 **Poor transcription quality**
 → System Settings > Keyboard > Dictation → turn ON, enable **"Use Enhanced Dictation"**.
-→ Or set `requiresOnDeviceRecognition = false` in `main.swift` to use Apple's servers (needs internet).
+→ Or set `"onDevice": false` in `~/.pi-dictation.json` to use Apple's servers (needs internet).
 
 **"Swift toolchain not found"**
 → Run `xcode-select --install` in Terminal.
@@ -154,7 +162,7 @@ Pi has **no built-in voice features** — everything is extensions. Before pi-di
 ### What makes pi-dictation different
 
 - **Zero dependencies** — no npm packages for STT, no API keys, no cloud accounts. Uses only `SFSpeechRecognizer` and `say`, both built into macOS.
-- **All-local** — speech recognition runs on-device (or Apple's privacy-preserving servers if `requiresOnDeviceRecognition = false`). Nothing leaves your machine to a third party.
+- **All-local** — speech recognition runs on-device (or Apple's privacy-preserving servers if `"onDevice": false` in `~/.pi-dictation.json`). Nothing leaves your machine to a third party.
 - **Trigger-word barge-in** — say "hey", "silence", "quiet", "shut up", "hold on", "wait", or "pause" to silence Pi mid-sentence without sending a message. Stays in conversation mode.
 - **Full-duplex** — `/conversation` speaks and listens simultaneously. No push-to-talk required.
 - **Native Swift helper** — compiled on your machine with a single `swift build`, no pre-built binaries needed.
@@ -182,7 +190,7 @@ It detects:
 | On-device recognition | ✅ Fast (Neural Engine) | ✅ Supported (slower) |
 | Swift compilation | Native arm64 binary | Native x64 binary |
 
-> **Note:** On-device speech recognition (`requiresOnDeviceRecognition = true`) is only available on macOS 13+ (Ventura). On Monterey (macOS 12), you must use Apple's servers by setting `requiresOnDeviceRecognition = false` in `main.swift`.
+> **Note:** On-device speech recognition (`"onDevice": true`) is only available on macOS 13+ (Ventura). On Monterey (macOS 12), keep `"onDevice": false` (the default) to use Apple's servers.
 
 ## License
 

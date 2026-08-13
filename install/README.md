@@ -180,16 +180,18 @@ Speak a few words. You should see live transcription. Press `Ctrl+C` to quit.
 
 ## Customising
 
-Edit `dictation-helper/Sources/main.swift`:
+Speech recognition is **auto-configured** — pi-dictation detects your Mac (Apple Silicon → `silentTimeout: 3.0`, Intel → `10.0`). To override, create `~/.pi-dictation.json` (all keys optional):
 
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| `timeoutSeconds` | `30` | Max recording seconds before auto-stop |
-| `silentTimeout` | `10.0` | Seconds of silence before auto-finish |
-| `locale` | `en-US` | Speech recognition language (e.g. `fr-FR`, `de-DE`) |
-| `requiresOnDeviceRecognition` | `false` | Use Apple servers (`false`) or on-device only (`true`; macOS 13+ required) |
+```json
+{
+  "silentTimeout": 5.0,
+  "timeoutSeconds": 30,
+  "locale": "en-US",
+  "onDevice": false
+}
+```
 
-Changes take effect next time you dictate — no rebuild needed, it recompiles automatically.
+Omit keys to use the auto-detected defaults. `onDevice: true` uses on-device recognition (private, offline; macOS 13+ required).
 
 ### TTS voice
 
@@ -264,7 +266,7 @@ rm .pi/extensions/dictation
 | On-device recognition | ✅ Fast (Neural Engine) | ✅ Supported (slower) |
 | Swift compilation | Native arm64 | Native x64 |
 
-> **Monterey users (macOS 12):** On-device recognition requires macOS 13+. Set `requiresOnDeviceRecognition = false` in `main.swift` to use Apple's servers.
+> **Monterey users (macOS 12):** On-device recognition requires macOS 13+. Keep `"onDevice": false` (the default) to use Apple's servers.
 
 ## Files in this package
 
